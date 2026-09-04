@@ -1,0 +1,51 @@
+name: Performance Test
+
+# Manual only — starts the server binary locally and load-tests the CRUD endpoints. This project
+# is an in-memory CRUD skeleton (see internal/handlers/item_handler.go) with no external datastore,
+# so it's safe to load-test directly without the safeguards a networked-service perf job would need.
+on:
+  workflow_dispatch: {}
+  release:
+    types: [published]
+
+jobs:
+  perf-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        run: go build -o server ./cmd/server
+
+      - name: Start server
+        run: |
+          ./server > server.log 2>&1 &
+          for i in $(seq 1 15); do
+            curl -sf -o /dev/null http://127.0.0.1:8080/items && break
+            sleep 1
+          done
+
+      - name: Install autocannon
+        run: npm install --global autocannon
+
+      - name: Baseline (low concurrency) — GET /items
+        run: autocannon -c 5 -d 10 http://127.0.0.1:8080/items
+
+      - name: Load (higher concurrency) — GET /items
+        run: autocannon -c 100 -d 20 http://127.0.0.1:8080/items --json > perf-results.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-results
+          path: |
+            perf-results.json
+            server.log
